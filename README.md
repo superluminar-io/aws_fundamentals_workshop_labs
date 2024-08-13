@@ -21,7 +21,6 @@ To run these labs, you'll need:
 1. An AWS account
 2. Node.js and npm installed
 3. AWS CDK CLI installed (`npm install -g aws-cdk`)
-4. AWS CLI configured with your credentials
 
 ## Getting Started
 
