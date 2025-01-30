@@ -1,152 +1,141 @@
-import { CfnOutput, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib'
+import {CfnOutput, RemovalPolicy, Stack, StackProps} from 'aws-cdk-lib'
 import {
-  SubnetType,
-  Vpc,
-  SecurityGroup,
-  Peer,
-  Port,
-  Instance,
-  InstanceType,
-  InstanceClass,
-  InstanceSize,
-  MachineImage,
-  UserData,
+    SubnetType,
+    Vpc,
+    SecurityGroup,
+    Port,
 } from 'aws-cdk-lib/aws-ec2'
 import {
-  ArnPrincipal,
-  ManagedPolicy,
-  PolicyStatement,
-  Role,
-  ServicePrincipal,
+    ArnPrincipal,
+    PolicyStatement,
 } from 'aws-cdk-lib/aws-iam'
-import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3'
-import { Construct } from 'constructs'
+import {BlockPublicAccess, Bucket} from 'aws-cdk-lib/aws-s3'
+import {Construct} from 'constructs'
+import {
+    Cluster,
+    ContainerImage,
+    FargateService,
+    FargateTaskDefinition,
+    ListenerConfig,
+    LogDrivers
+} from "aws-cdk-lib/aws-ecs";
+import {ApplicationLoadBalancer, ApplicationProtocol} from "aws-cdk-lib/aws-elasticloadbalancingv2";
 
 export class AwsFundamentalsWorkshopLabsStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
-    super(scope, id, props)
+    constructor(scope: Construct, id: string, props?: StackProps) {
+        super(scope, id, props)
 
-    // Create a VPC
-    const vpc = new Vpc(this, 'MyVpc', {
-      natGateways: 1, // Default is one in each AZ, this creates only one instead of two.
-      subnetConfiguration: [
-        {
-          cidrMask: 24,
-          name: 'public',
-          subnetType: SubnetType.PUBLIC,
-        },
-        {
-          cidrMask: 24,
-          name: 'private',
-          subnetType: SubnetType.PRIVATE_WITH_EGRESS, // This creates a private subnet with egress access to the internet.
-        },
-      ],
-    })
+        // Create a VPC
+        const vpc = new Vpc(this, 'MyVpc', {
+            natGateways: 1, // Default is one in each AZ, this creates only one instead of two.
+            subnetConfiguration: [
+                {
+                    cidrMask: 24,
+                    name: 'public',
+                    subnetType: SubnetType.PUBLIC,
+                },
+                {
+                    cidrMask: 24,
+                    name: 'private',
+                    subnetType: SubnetType.PRIVATE_WITH_EGRESS, // This creates a private subnet with egress access to the internet.
+                },
+            ],
+        })
 
-    // Security Group for EC2 instance
-    const ec2SecurityGroup = new SecurityGroup(this, 'EC2SecurityGroup', {
-      vpc,
-      allowAllOutbound: true,
-      description: 'Allow HTTP access to EC2 instance',
-    })
+        // Create the ECS Cluster
+        const cluster = new Cluster(this, 'FargateCluster', {
+            vpc,
+        });
+        // Create a Fargate Task Definition with a Container
+        const fargateTaskDefinition = new FargateTaskDefinition(this, 'TaskDef');
+        fargateTaskDefinition.addContainer('AppContainer', {
+            containerName: 'web',
+            image: ContainerImage.fromRegistry('nginx:latest'),
+            memoryLimitMiB: 512,
+            cpu: 256,
+            logging: LogDrivers.awsLogs({streamPrefix: 'myApp/nginx'}),
+            portMappings: [{containerPort: 80}],
+        });
 
-    // Allow HTTP access to the EC2 instance
-    ec2SecurityGroup.addIngressRule(
-      Peer.anyIpv4(),
-      Port.tcp(80),
-      'Allow HTTP access'
-    )
+        // Create a Fargate Service
+        const service = new FargateService(this, 'FargateService', {
+            cluster,
+            taskDefinition: fargateTaskDefinition,
+            minHealthyPercent: 100,
 
-    // Security Group for RDS instance
-    const rdsSecurityGroup = new SecurityGroup(this, 'RDSSecurityGroup', {
-      vpc,
-      allowAllOutbound: true,
-      description: 'Allow MySQL access to RDS instance',
-    })
-    rdsSecurityGroup.addIngressRule(
-      ec2SecurityGroup,
-      Port.tcp(3306),
-      'Allow MySQL access from EC2 instance'
-    )
+        });
 
-    // IAM role for EC2 instance to use SSM
-    const role = new Role(this, 'SSMRole', {
-      assumedBy: new ServicePrincipal('ec2.amazonaws.com'),
-    })
+        // Create an Application Load Balancer that listens on port 80
+        const lb = new ApplicationLoadBalancer(this, 'LoadBalancer', {vpc, internetFacing: true});
+        const listener = lb.addListener('LBListener', {port: 80});
 
-    // Attach the AmazonSSMManagedInstanceCore managed policy to the role
-    role.addManagedPolicy(
-      ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')
-    )
+        // Register the ECS Service as a target of the Application Load Balancer
+        service.registerLoadBalancerTargets(
+            {
+                containerName: 'web',
+                containerPort: 80,
+                newTargetGroupId: 'ecs_nginx',
+                listener: ListenerConfig.applicationListener(listener, {
+                    protocol: ApplicationProtocol.HTTP,
+                }),
+            },
+        );
 
-    // Add S3 read permissions to the EC2 instance role
-    role.addManagedPolicy(
-      ManagedPolicy.fromAwsManagedPolicyName('AmazonS3ReadOnlyAccess')
-    )
+        // Security Group for RDS instance that allows ingress from the ECS service
+        const rdsSecurityGroup = new SecurityGroup(this, 'RDSSecurityGroup', {
+            vpc,
+            allowAllOutbound: true,
+            description: 'Allow MySQL access to RDS instance',
+        })
+        rdsSecurityGroup.addIngressRule(
+            service.connections.securityGroups[0],
+            Port.tcp(3306),
+            'Allow MySQL access from ECS service'
+        )
 
-    // Create an EC2 instance
-    const ec2Instance = new Instance(this, 'MyEC2Instance', {
-      vpc,
-      instanceType: InstanceType.of(InstanceClass.T2, InstanceSize.MICRO),
-      machineImage: MachineImage.latestAmazonLinux2(),
-      securityGroup: ec2SecurityGroup,
-      vpcSubnets: { subnetType: SubnetType.PUBLIC },
-      role: role,
-      userData: UserData.forLinux(),
-    })
+        // Create an S3 bucket
+        const bucket = new Bucket(this, 'MyBucket', {
+            removalPolicy: RemovalPolicy.DESTROY,
+            autoDeleteObjects: true,
+            publicReadAccess: false, // Ensure the bucket is not publicly accessible
+            blockPublicAccess: BlockPublicAccess.BLOCK_ALL, // Block all public access
+        })
 
-    // Install AWS CLI on the EC2 instance
-    ec2Instance.addUserData(
-      'yum update -y',
-      'yum install -y aws-cli',
-      'echo "AWS CLI installed. You can now use AWS S3 commands to test bucket access."'
-    )
+        // Add a bucket policy that allows access from the ECS service
+        bucket.addToResourcePolicy(
+            new PolicyStatement({
+                actions: [
+                    's3:GetObject',
+                    's3:ListBucket',
+                    's3:PutObject',
+                    's3:DeleteObject',
+                    's3:DeleteBucket',
+                ],
+                resources: [bucket.bucketArn, bucket.arnForObjects('*')],
+                principals: [new ArnPrincipal(service.taskDefinition.taskRole.roleArn)],
+            })
+        )
 
-    // Create an S3 bucket
-    const bucket = new Bucket(this, 'MyBucket', {
-      removalPolicy: RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-      publicReadAccess: false, // Ensure the bucket is not publicly accessible
-      blockPublicAccess: BlockPublicAccess.BLOCK_ALL, // Block all public access
-    })
+        //Output the Load Balancer DNS Name for easy reference
+        new CfnOutput(this, 'LoadBalancerDNS', {
+            value: lb.loadBalancerDnsName,
+            description: 'DNS Name of the Application Load Balancer',
+        })
 
-    // Add a bucket policy that allows access from the EC2 instance
-    bucket.addToResourcePolicy(
-      new PolicyStatement({
-        actions: [
-          's3:GetObject',
-          's3:ListBucket',
-          's3:PutObject',
-          's3:DeleteObject',
-          's3:DeleteBucket',
-        ],
-        resources: [bucket.bucketArn, bucket.arnForObjects('*')],
-        principals: [new ArnPrincipal(ec2Instance.role.roleArn)],
-      })
-    )
+        // Output the bucket name for easy reference
+        new CfnOutput(this, 'BucketName', {
+            value: bucket.bucketName,
+            description: 'Name of the S3 bucket',
+        })
 
-    // Output the bucket name for easy reference
-    new CfnOutput(this, 'BucketName', {
-      value: bucket.bucketName,
-      description: 'Name of the S3 bucket',
-    })
+        // Output the RDS Security Group ID for easy reference
+        new CfnOutput(this, 'RDSSecurityGroupId', {
+            value: rdsSecurityGroup.securityGroupId,
+        })
 
-    // Output the EC2 instance ID
-    new CfnOutput(this, 'EC2InstanceId', {
-      value: ec2Instance.instanceId,
-    })
-
-    // Output the Security Group IDs
-    new CfnOutput(this, 'EC2SecurityGroupId', {
-      value: ec2SecurityGroup.securityGroupId,
-    })
-    new CfnOutput(this, 'RDSSecurityGroupId', {
-      value: rdsSecurityGroup.securityGroupId,
-    })
-
-    // Output the VPC ID
-    new CfnOutput(this, 'VpcId', {
-      value: vpc.vpcId,
-    })
-  }
+        // Output the VPC ID
+        new CfnOutput(this, 'VpcId', {
+            value: vpc.vpcId,
+        })
+    }
 }
