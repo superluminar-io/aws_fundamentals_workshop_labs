@@ -67,7 +67,7 @@ export class AwsFundamentalsWorkshopLabsStack extends Stack {
             cluster,
             taskDefinition: fargateTaskDefinition,
             minHealthyPercent: 100,
-
+            vpcSubnets: {subnetType: SubnetType.PRIVATE_WITH_EGRESS},
         });
 
         // Create an Application Load Balancer that listens on port 80
