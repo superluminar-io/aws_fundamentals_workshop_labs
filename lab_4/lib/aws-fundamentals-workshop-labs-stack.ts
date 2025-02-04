@@ -49,17 +49,17 @@ export class AwsFundamentalsWorkshopLabsStack extends Stack {
         // Create a Fargate Task Definition with a Container
         const fargateTaskDefinition = new FargateTaskDefinition(this, 'TaskDef');
         fargateTaskDefinition.addContainer('AppContainer', {
-          containerName: 'web',
-          image: ContainerImage.fromRegistry('ghcr.io/superluminar-io/dct:latest'),
-          memoryLimitMiB: 512,
-          cpu: 256,
-          logging: LogDrivers.awsLogs({streamPrefix: 'myApp/webapp'}),
-          portMappings: [{containerPort: 8081}],
-          environment: {
-            DB_HOST: 'some-host',
-            DB_USERNAME: 'some-user',
-            DB_PASSWORD: 'some-password',
-          }
+            containerName: 'web',
+            image: ContainerImage.fromRegistry('ghcr.io/superluminar-io/dct:latest'),
+            memoryLimitMiB: 512,
+            cpu: 256,
+            logging: LogDrivers.awsLogs({streamPrefix: 'myApp/webapp'}),
+            portMappings: [{containerPort: 8081}],
+            environment: {
+                DB_HOST: 'some-host',
+                DB_USERNAME: 'some-user',
+                DB_PASSWORD: 'some-password',
+            }
         });
 
         // Create a Fargate Service
