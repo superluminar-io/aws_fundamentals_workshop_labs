@@ -36,6 +36,8 @@ export class AwsFundamentalsWorkshopLabsStack extends Stack {
 
     // Attach the correct policy to the Lambda role
     lambdaRole.attachInlinePolicy(correctPolicy)
+    // Attach an AWS-managed policy to enable logging to AWS CloudWatch
+    lambdaRole.addManagedPolicy({ managedPolicyArn: 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole' })
 
     // Create a Lambda function with inline code
     const lambdaFunction = new Function(this, 'MyLambda', {
